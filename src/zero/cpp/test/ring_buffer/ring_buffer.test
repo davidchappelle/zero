@@ -1,0 +1,125 @@
+#include <cxxtest/TestSuite.h>
+#include <cxxtest/GlobalFixture.h>
+#include <string.h>
+
+
+#include "zero/cpp/ring_buffer.hpp"
+
+
+namespace
+{
+
+struct ring_buffer_data
+{
+    unsigned value1;
+    unsigned value2;
+};
+
+const sig_atomic_t cSlotCount = 1024;
+const sig_atomic_t cSlotSize = sizeof(ring_buffer_data);
+
+} // namespace anonymous
+
+
+class RingBufferTestSuite : public CxxTest::TestSuite
+{
+    private:
+        uint8_t storage[RING_BUFFER_STORAGE_SIZE(cSlotSize, cSlotCount)];
+
+    public:
+        void setUp();
+
+        // Test the basic creation of a ring buffer and
+        // validate the internal state.
+        void test_zero_ring_buffer_basic();
+
+        // Test the lifecycle of the ring buffer writing
+        // it beyond full and then reading it beyond empty.
+        void test_zero_ring_buffer_lifecycle();
+};
+
+void RingBufferTestSuite::setUp()
+{
+    memset(storage, 0, sizeof(storage));
+}
+
+void RingBufferTestSuite::test_zero_ring_buffer_basic()
+{
+    zero::RingBuffer<ring_buffer_data> ring_buffer;
+    ring_buffer.create(storage, cSlotCount);
+
+    TS_ASSERT_EQUALS(ring_buffer.initialized(), true);
+    TS_ASSERT_EQUALS(ring_buffer.available(), cSlotCount);
+    TS_ASSERT_EQUALS(ring_buffer.size(), cSlotCount - 1);
+    TS_ASSERT_EQUALS(ring_buffer.used(), 0ULL);
+    TS_ASSERT_EQUALS(ring_buffer.empty(), true);
+    TS_ASSERT_EQUALS(ring_buffer.full(), false);
+
+    ring_buffer.destroy();
+}
+
+void RingBufferTestSuite::test_zero_ring_buffer_lifecycle()
+{
+    zero::RingBuffer<ring_buffer_data> ring_buffer;
+    ring_buffer.create(storage, cSlotCount);
+
+    for (unsigned cycles = 0; cycles < 2; cycles++)
+    {
+        sig_atomic_t ring_buffer_size = ring_buffer.size();
+        TS_ASSERT_EQUALS(ring_buffer.empty(), true);
+
+        // Try to read from an empty ring buffer expecting a failure.
+        TS_ASSERT_EQUALS(ring_buffer.stage_read(), (void*)NULL);
+        TS_ASSERT_EQUALS(ring_buffer.commit_read(), false);
+
+        // Fill the buffer fully with known values.
+        for (sig_atomic_t i = 0; i < ring_buffer_size; i++)
+        {
+            ring_buffer_data* slot = ring_buffer.stage_write();
+            TS_ASSERT_DIFFERS(slot, (void*)NULL);
+            slot->value1 = i;
+            slot->value2 = i*i;
+
+            TS_ASSERT_EQUALS(ring_buffer.commit_write(), true);
+            TS_ASSERT_EQUALS(ring_buffer.empty(), false);
+            if (i < ring_buffer_size - 1)
+            {
+                TS_ASSERT_EQUALS(ring_buffer.full(), false);
+            }
+            else
+            {
+                TS_ASSERT_EQUALS(ring_buffer.full(), true);
+            }
+        }
+
+        // Try to write past end of ring buffer expecting a failure
+        TS_ASSERT_EQUALS(ring_buffer.stage_write(), (void*)NULL);
+        TS_ASSERT_EQUALS(ring_buffer.commit_write(), false);
+
+        // Deplete the ring buffer and validate the values.
+        for (sig_atomic_t i = 0; i < ring_buffer_size; i++)
+        {
+            ring_buffer_data* slot = ring_buffer.stage_read();
+            TS_ASSERT_DIFFERS(slot, (void*)NULL);
+            TS_ASSERT_EQUALS(slot->value1, i);
+            TS_ASSERT_EQUALS(slot->value2, i*i);
+
+            TS_ASSERT_EQUALS(ring_buffer.commit_read(), true);
+            TS_ASSERT_EQUALS(ring_buffer.full(), false);
+            if (i < ring_buffer_size - 1)
+            {
+                TS_ASSERT_EQUALS(ring_buffer.empty(), false);
+            }
+            else
+            {
+                TS_ASSERT_EQUALS(ring_buffer.empty(), true);
+            }
+        }
+
+        // Try to read from an empty ring buffer expecting a failure.
+        TS_ASSERT_EQUALS(ring_buffer.stage_read(), (void*)NULL);
+        TS_ASSERT_EQUALS(ring_buffer.commit_read(), false);
+    }
+
+    ring_buffer.destroy();
+}

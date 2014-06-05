@@ -1,0 +1,117 @@
+#include <cxxtest/TestSuite.h>
+#include <cxxtest/GlobalFixture.h>
+#include <string.h>
+
+#include "zero/c/zero_ring_buffer.h"
+
+namespace
+{
+
+const sig_atomic_t cSlotCount = 1024;
+const sig_atomic_t cSlotSize = sizeof(sig_atomic_t);
+
+} // namespace anonymous
+
+
+class ZeroRingBufferTestSuite : public CxxTest::TestSuite
+{
+    private:
+        uint8_t storage[RING_BUFFER_STORAGE_SIZE(cSlotSize, cSlotCount)];
+
+    public:
+
+        void setUp();
+
+        // Test the basic creation of a ring buffer and
+        // validate the internal state.
+        void test_zero_ring_buffer_basic();
+
+        // Test the lifecycle of the ring buffer writing
+        // it beyond full and then reading it beyond empty.
+        void test_zero_ring_buffer_lifecycle();
+};
+
+void ZeroRingBufferTestSuite::setUp()
+{
+    memset(storage, 0, sizeof(storage));
+}
+
+void ZeroRingBufferTestSuite::test_zero_ring_buffer_basic()
+{
+    struct zero_ring_buffer* ring_buffer =
+        zero_ring_buffer_create(storage, cSlotSize, cSlotCount);
+
+    TS_ASSERT_EQUALS(zero_ring_buffer_initialized(ring_buffer), true);
+    TS_ASSERT_EQUALS(zero_ring_buffer_available(ring_buffer), cSlotCount);
+    TS_ASSERT_EQUALS(zero_ring_buffer_size(ring_buffer), cSlotCount - 1);
+    TS_ASSERT_EQUALS(zero_ring_buffer_used(ring_buffer), 0ULL);
+    TS_ASSERT_EQUALS(zero_ring_buffer_empty(ring_buffer), true);
+    TS_ASSERT_EQUALS(zero_ring_buffer_full(ring_buffer), false);
+
+    zero_ring_buffer_destroy(ring_buffer);
+    TS_ASSERT_EQUALS(zero_ring_buffer_initialized(ring_buffer), false);
+}
+
+void ZeroRingBufferTestSuite::test_zero_ring_buffer_lifecycle()
+{
+    struct zero_ring_buffer* ring_buffer =
+        zero_ring_buffer_create(storage, cSlotSize, cSlotCount);
+
+    for (sig_atomic_t cycles = 0; cycles < 2; cycles++)
+    {
+        sig_atomic_t ring_buffer_size = zero_ring_buffer_size(ring_buffer);
+        TS_ASSERT_EQUALS(zero_ring_buffer_empty(ring_buffer), true);
+
+        // Try to read from an empty ring buffer expecting a failure.
+        TS_ASSERT_EQUALS(zero_ring_buffer_stage_read(ring_buffer), (void*)NULL);
+        TS_ASSERT_EQUALS(zero_ring_buffer_commit_read(ring_buffer), false);
+
+        // Fill the buffer fully with known values.
+        for (sig_atomic_t i = 0; i < ring_buffer_size; i++)
+        {
+            sig_atomic_t* value = (sig_atomic_t*)zero_ring_buffer_stage_write(ring_buffer);
+            TS_ASSERT_DIFFERS(value, (void*)NULL);
+            *value = i;
+
+            TS_ASSERT_EQUALS(zero_ring_buffer_commit_write(ring_buffer), true);
+            TS_ASSERT_EQUALS(zero_ring_buffer_empty(ring_buffer), false);
+            if (i < ring_buffer_size - 1)
+            {
+                TS_ASSERT_EQUALS(zero_ring_buffer_full(ring_buffer), false);
+            }
+            else
+            {
+                TS_ASSERT_EQUALS(zero_ring_buffer_full(ring_buffer), true);
+            }
+        }
+
+        // Try to write past end of ring buffer expecting a failure
+        TS_ASSERT_EQUALS(zero_ring_buffer_stage_write(ring_buffer), (void*)NULL);
+        TS_ASSERT_EQUALS(zero_ring_buffer_commit_write(ring_buffer), false);
+
+        // Deplete the ring buffer and validate the values.
+        for (sig_atomic_t i = 0; i < ring_buffer_size; i++)
+        {
+            sig_atomic_t* value = (sig_atomic_t*)zero_ring_buffer_stage_read(ring_buffer);
+            TS_ASSERT_DIFFERS(value, (void*)NULL);
+            TS_ASSERT_EQUALS(*value, i);
+
+            TS_ASSERT_EQUALS(zero_ring_buffer_commit_read(ring_buffer), true);
+            TS_ASSERT_EQUALS(zero_ring_buffer_full(ring_buffer), false);
+            if (i < ring_buffer_size - 1)
+            {
+                TS_ASSERT_EQUALS(zero_ring_buffer_empty(ring_buffer), false);
+            }
+            else
+            {
+                TS_ASSERT_EQUALS(zero_ring_buffer_empty(ring_buffer), true);
+            }
+        }
+
+        // Try to read from an empty ring buffer expecting a failure.
+        TS_ASSERT_EQUALS(zero_ring_buffer_stage_read(ring_buffer), (void*)NULL);
+        TS_ASSERT_EQUALS(zero_ring_buffer_commit_read(ring_buffer), false);
+    }
+
+    zero_ring_buffer_destroy(ring_buffer);
+}
